@@ -1,0 +1,20 @@
+{
+  "name": "POS System",
+  "short_name": "POS",
+  "description": "Point of Sale System with Offline Support",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2c3e50",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' fill='%232c3e50' rx='24'/><circle cx='96' cy='96' r='60' fill='%233498db' opacity='0.1'/><path d='M96 36c-24.3 0-44 19.7-44 44 0 8.5 2.4 16.5 6.7 23.4L96 156l37.3-52.6c4.3-6.9 6.7-14.9 6.7-23.4 0-24.3-19.7-44-44-44z' fill='%2327ae60'/><circle cx='96' cy='80' r='12' fill='%23ffffff'/><path d='M76 100h40v8H76v-8z' fill='%232c3e50'/><path d='M60 120h72v8H60v-8z' fill='%232c3e50'/></svg>",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    }
+  ],
+  "categories": ["business", "productivity"],
+  "lang": "en-US"
+}

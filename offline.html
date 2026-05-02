@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>POS System - Offline</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <link
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .offline-card {
+        background: white;
+        border-radius: 15px;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        padding: 3rem;
+        text-align: center;
+        max-width: 500px;
+        width: 100%;
+      }
+      .offline-icon {
+        font-size: 4rem;
+        color: #6c757d;
+        margin-bottom: 1rem;
+      }
+      .sync-status {
+        background: #f8f9fa;
+        border-radius: 10px;
+        padding: 1rem;
+        margin-top: 2rem;
+      }
+      .sync-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.5rem 0;
+        border-bottom: 1px solid #dee2e6;
+      }
+      .sync-item:last-child {
+        border-bottom: none;
+      }
+      .status-indicator {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 0.5rem;
+      }
+      .status-pending {
+        background: #ffc107;
+      }
+      .status-synced {
+        background: #28a745;
+      }
+      .status-error {
+        background: #dc3545;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="offline-card">
+        <div class="offline-icon">
+          <i class="fas fa-wifi-slash"></i>
+        </div>
+        <h2 class="mb-3">You're Offline</h2>
+        <p class="text-muted mb-4">
+          Don't worry! Your POS system is available offline. You can continue
+          working and all changes will be synced when you're back online.
+        </p>
+
+        <div class="row g-3 mb-4">
+          <div class="col-6">
+            <div class="card bg-light border-0">
+              <div class="card-body text-center">
+                <i
+                  class="fas fa-shopping-cart text-success mb-2"
+                  style="font-size: 2rem"
+                ></i>
+                <h6 class="mb-0">Process Sales</h6>
+                <small class="text-muted">Continue selling</small>
+              </div>
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="card bg-light border-0">
+              <div class="card-body text-center">
+                <i
+                  class="fas fa-box text-primary mb-2"
+                  style="font-size: 2rem"
+                ></i>
+                <h6 class="mb-0">View Products</h6>
+                <small class="text-muted">Browse inventory</small>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sync-status">
+          <h6 class="mb-3">
+            <i class="fas fa-sync text-primary"></i> Sync Status
+          </h6>
+          <div id="syncStatus">
+            <div class="sync-item">
+              <span
+                ><span class="status-indicator status-pending"></span>Sales
+                Data</span
+              >
+              <small class="text-muted" id="salesCount">0 pending</small>
+            </div>
+            <div class="sync-item">
+              <span
+                ><span class="status-indicator status-pending"></span>Product
+                Updates</span
+              >
+              <small class="text-muted" id="productsCount">0 pending</small>
+            </div>
+            <div class="sync-item">
+              <span
+                ><span class="status-indicator status-pending"></span>Customer
+                Data</span
+              >
+              <small class="text-muted" id="customersCount">0 pending</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-4">
+          <button class="btn btn-primary me-2" onclick="checkConnection()">
+            <i class="fas fa-wifi"></i> Check Connection
+          </button>
+          <button class="btn btn-outline-secondary" onclick="forceSync()">
+            <i class="fas fa-sync"></i> Force Sync
+          </button>
+        </div>
+
+        <div class="mt-3">
+          <small class="text-muted">
+            <i class="fas fa-info-circle"></i>
+            Data is automatically synced when connection is restored
+          </small>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // Check online status
+      function checkConnection() {
+        if (navigator.onLine) {
+          location.reload();
+        } else {
+          alert("Still offline. Please check your internet connection.");
+        }
+      }
+
+      // Force sync attempt
+      async function forceSync() {
+        if (
+          "serviceWorker" in navigator &&
+          "sync" in window.ServiceWorkerRegistration.prototype
+        ) {
+          try {
+            const registration = await navigator.serviceWorker.ready;
+            await registration.sync.register("sync-sales");
+            await registration.sync.register("sync-products");
+            alert(
+              "Sync initiated. Data will be synced when connection is available.",
+            );
+          } catch (error) {
+            console.error("Sync registration failed:", error);
+            alert("Sync failed. Please try again when online.");
+          }
+        } else {
+          alert(
+            "Background sync not supported. Please go online to sync data.",
+          );
+        }
+      }
+
+      // Update sync status
+      async function updateSyncStatus() {
+        try {
+          const db = await openIndexedDB();
+          const sales = await getOfflineData(db, "sales");
+          const products = await getOfflineData(db, "products");
+          const customers = await getOfflineData(db, "customers");
+
+          document.getElementById("salesCount").textContent =
+            `${sales.length} pending`;
+          document.getElementById("productsCount").textContent =
+            `${products.length} pending`;
+          document.getElementById("customersCount").textContent =
+            `${customers.length} pending`;
+
+          // Update status indicators
+          updateStatusIndicator("salesCount", sales.length);
+          updateStatusIndicator("productsCount", products.length);
+          updateStatusIndicator("customersCount", customers.length);
+        } catch (error) {
+          console.error("Failed to update sync status:", error);
+        }
+      }
+
+      function updateStatusIndicator(elementId, count) {
+        const element =
+          document.getElementById(elementId).previousElementSibling;
+        element.className =
+          "status-indicator " +
+          (count > 0 ? "status-pending" : "status-synced");
+      }
+
+      // IndexedDB helpers
+      function openIndexedDB() {
+        return new Promise((resolve, reject) => {
+          const request = indexedDB.open("pos-offline", 1);
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => resolve(request.result);
+        });
+      }
+
+      async function getOfflineData(db, storeName) {
+        return new Promise((resolve, reject) => {
+          const transaction = db.transaction([storeName], "readonly");
+          const store = transaction.objectStore(storeName);
+          const request = store.getAll();
+
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => resolve(request.result);
+        });
+      }
+
+      // Listen for online/offline events
+      window.addEventListener("online", () => {
+        console.log("Back online");
+        updateSyncStatus();
+      });
+
+      window.addEventListener("offline", () => {
+        console.log("Gone offline");
+      });
+
+      // Initial status update
+      updateSyncStatus();
+
+      // Periodic status updates
+      setInterval(updateSyncStatus, 30000); // Update every 30 seconds
+    </script>
+  </body>
+</html>

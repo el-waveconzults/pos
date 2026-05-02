@@ -1,0 +1,35 @@
+# PHP and environment
+/vendor/
+/node_modules/
+/.idea/
+/.vscode/
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.cache
+*.tmp
+tmp/
+cache/
+
+# XAMPP / Apache logs
+logs/
+error_log
+access_log
+
+# User uploads and runtime generated data
+uploads/
+
+# Composer
+composer.phar
+composer.lock
+
+# Ignore generated files
+*.bak
+*~
