@@ -8,6 +8,10 @@ $branchId = $currentUser['branch_id'] ?? 0;
 $company = getCompany($companyId);
 $currentBranch = getCurrentBranch();
 
+// Get license information
+$licenseMiddleware = getLicenseMiddleware();
+$licenseInfo = $licenseMiddleware->getLicenseInfo($companyId);
+
 // Get all branches for this company
 $branches = getBranches($companyId);
 
@@ -162,6 +166,47 @@ for ($i = 11; $i >= 0; $i--) {
         </div>
     </div>
 </div>
+
+<!-- License Status -->
+<?php if ($licenseInfo): ?>
+    <div class="row mb-4">
+        <div class="col-md-12">
+            <div class="card border-0 shadow-sm" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                <div class="card-body">
+                    <div class="row align-items-center">
+                        <div class="col-md-8">
+                            <h5 class="mb-1"><i class="fas fa-key"></i> License Status</h5>
+                            <p class="mb-1"><strong>Tier:</strong> <?= ucfirst($licenseInfo['tier']) ?></p>
+                            <p class="mb-1"><strong>Status:</strong>
+                                <span class="badge <?= $licenseInfo['status'] === 'active' ? 'bg-success' : ($licenseInfo['status'] === 'suspended' ? 'bg-warning' : 'bg-danger') ?>">
+                                    <?= ucfirst($licenseInfo['status']) ?>
+                                </span>
+                            </p>
+                            <p class="mb-0"><strong>Expires:</strong> <?= date('M d, Y', strtotime($licenseInfo['expiresAt'])) ?>
+                                <?php if ($licenseInfo['isExpiringSoon'] && !$licenseInfo['isExpired']): ?>
+                                    <span class="badge bg-warning">Expiring soon!</span>
+                                <?php elseif ($licenseInfo['isExpired']): ?>
+                                    <span class="badge bg-danger">Expired</span>
+                                <?php endif; ?>
+                            </p>
+                        </div>
+                        <div class="col-md-4 text-end">
+                            <div style="font-size: 48px; font-weight: bold;">
+                                <?php if ($licenseInfo['isExpiringSoon'] && !$licenseInfo['isExpired']): ?>
+                                    <i class="fas fa-hourglass-end"></i>
+                                <?php elseif ($licenseInfo['isExpired']): ?>
+                                    <i class="fas fa-lock"></i>
+                                <?php else: ?>
+                                    <i class="fas fa-check-circle"></i>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+<?php endif; ?>
 
 <!-- Sales Overviews -->
 <div class="row mb-4">

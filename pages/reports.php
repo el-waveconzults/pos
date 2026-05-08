@@ -3,6 +3,7 @@ require_once 'config/config.php';
 $conn = getDB();
 
 $currentUser = getCurrentUser();
+
 $companyId = $currentUser['company_id'] ?? 0;
 
 // Get date range

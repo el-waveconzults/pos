@@ -9,30 +9,96 @@ $companyId = $currentUser['company_id'] ?? 0;
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
 
-    if ($action === 'add_customer') {
-        $stmt = $conn->prepare("INSERT INTO customers (company_id, name, email, phone, address, company_name) VALUES (?, ?, ?, ?, ?, ?)");
-        $stmt->bind_param("isssss", $companyId, $_POST['name'], $_POST['email'], $_POST['phone'], $_POST['address'], $_POST['company_name']);
-        $stmt->execute();
-        $success = "Customer added successfully!";
+    // CSRF Token Verification
+    if (!verifyCSRFToken($_POST['csrf_token'] ?? '')) {
+        $error = "Security token verification failed. Please try again.";
+    } elseif ($action === 'add_customer') {
+        // Input Validation
+        $name = validateInput($_POST['name'] ?? '', 'string', true);
+        $email = validateInput($_POST['email'] ?? '', 'email');
+        $phone = validateInput($_POST['phone'] ?? '', 'phone');
+        $address = validateInput($_POST['address'] ?? '', 'string');
+        $companyName = validateInput($_POST['company_name'] ?? '', 'string');
+
+        if ($name === false) {
+            $error = "Invalid customer name.";
+        } else {
+            $stmt = $conn->prepare("INSERT INTO customers (company_id, name, email, phone, address, company_name) VALUES (?, ?, ?, ?, ?, ?)");
+            $stmt->bind_param("isssss", $companyId, $name, $email, $phone, $address, $companyName);
+            if ($stmt->execute()) {
+                $success = "Customer added successfully!";
+            } else {
+                $error = "Database error: " . $conn->error;
+            }
+        }
     } elseif ($action === 'update_customer') {
-        $stmt = $conn->prepare("UPDATE customers SET company_id=?, name=?, email=?, phone=?, address=?, company_name=? WHERE id=?");
-        $stmt->bind_param("isssssi", $companyId, $_POST['name'], $_POST['email'], $_POST['phone'], $_POST['address'], $_POST['company_name'], $_POST['id']);
-        $stmt->execute();
-        $success = "Customer updated successfully!";
+        // Input Validation
+        $customerId = validateInput($_POST['id'] ?? 0, 'int', true);
+        $name = validateInput($_POST['name'] ?? '', 'string', true);
+        $email = validateInput($_POST['email'] ?? '', 'email');
+        $phone = validateInput($_POST['phone'] ?? '', 'phone');
+        $address = validateInput($_POST['address'] ?? '', 'string');
+        $companyName = validateInput($_POST['company_name'] ?? '', 'string');
+
+        if ($customerId === false || $name === false) {
+            $error = "Invalid input data.";
+        } else {
+            // IDOR Check
+            if (!verifyIDOR('customer', $customerId, $companyId)) {
+                $error = "Unauthorized access to this customer.";
+            } else {
+                $stmt = $conn->prepare("UPDATE customers SET company_id=?, name=?, email=?, phone=?, address=?, company_name=? WHERE id=?");
+                $stmt->bind_param("isssssi", $companyId, $name, $email, $phone, $address, $companyName, $customerId);
+                if ($stmt->execute()) {
+                    $success = "Customer updated successfully!";
+                } else {
+                    $error = "Database error: " . $conn->error;
+                }
+            }
+        }
     } elseif ($action === 'delete_customer') {
-        $conn->query("UPDATE customers SET status='inactive' WHERE id=" . intval($_POST['id']) . " AND company_id = $companyId");
-        $success = "Customer deleted successfully!";
+        $customerId = validateInput($_POST['id'] ?? 0, 'int', true);
+        if ($customerId === false) {
+            $error = "Invalid customer ID.";
+        } elseif (!verifyIDOR('customer', $customerId, $companyId)) {
+            $error = "Unauthorized access to this customer.";
+        } else {
+            $stmt = $conn->prepare("UPDATE customers SET status='inactive' WHERE id=? AND company_id=?");
+            $stmt->bind_param("ii", $customerId, $companyId);
+            if ($stmt->execute()) {
+                $success = "Customer deleted successfully!";
+            } else {
+                $error = "Database error: " . $conn->error;
+            }
+        }
     }
 }
 
-$customers = $conn->query("SELECT * FROM customers WHERE company_id = $companyId AND status='active' ORDER BY name");
+// Get customers - show sample data for guests, real data for others
+if ($currentUser['role'] === 'guest') {
+    // Sample customers for guest demo
+    $customers = [
+        ['id' => 1, 'name' => 'John Doe', 'email' => 'john.doe@email.com', 'phone' => '+1-555-0123', 'address' => '123 Main St, City, State', 'company_name' => 'ABC Corp'],
+        ['id' => 2, 'name' => 'Jane Smith', 'email' => 'jane.smith@email.com', 'phone' => '+1-555-0124', 'address' => '456 Oak Ave, City, State', 'company_name' => 'XYZ Ltd'],
+        ['id' => 3, 'name' => 'Bob Johnson', 'email' => 'bob.johnson@email.com', 'phone' => '+1-555-0125', 'address' => '789 Pine Rd, City, State', 'company_name' => 'Tech Solutions'],
+        ['id' => 4, 'name' => 'Alice Brown', 'email' => 'alice.brown@email.com', 'phone' => '+1-555-0126', 'address' => '321 Elm St, City, State', 'company_name' => 'Global Services']
+    ];
+} else {
+    $customers = $conn->query("SELECT * FROM customers WHERE company_id = $companyId AND status='active' ORDER BY name");
+}
 ?>
 
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h4>Customers</h4>
-    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#customerModal">
-        <i class="fas fa-plus"></i> Add Customer
-    </button>
+    <?php if ($currentUser['role'] !== 'guest'): ?>
+        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#customerModal">
+            <i class="fas fa-plus"></i> Add Customer
+        </button>
+    <?php else: ?>
+        <div class="alert alert-info py-2 mb-0">
+            <small><i class="fas fa-info-circle me-1"></i>Demo customers - Sign up to manage your customer database</small>
+        </div>
+    <?php endif; ?>
 </div>
 
 <?php if (isset($success)): ?>
@@ -53,26 +119,48 @@ $customers = $conn->query("SELECT * FROM customers WHERE company_id = $companyId
                     </tr>
                 </thead>
                 <tbody>
-                    <?php while ($customer = $customers->fetch_assoc()): ?>
-                        <tr>
-                            <td><?= $customer['name'] ?></td>
-                            <td><?= $customer['company_name'] ?? '-' ?></td>
-                            <td><?= $customer['email'] ?? '-' ?></td>
-                            <td><?= $customer['phone'] ?? '-' ?></td>
-                            <td>
-                                <button class="btn btn-sm btn-outline-primary" onclick="editCustomer(<?= $customer['id'] ?>, '<?= addslashes($customer['name']) ?>', '<?= $customer['email'] ?? '' ?>', '<?= $customer['phone'] ?? '' ?>', '<?= addslashes($customer['address'] ?? '') ?>', '<?= addslashes($customer['company_name'] ?? '') ?>')">
-                                    <i class="fas fa-edit"></i>
-                                </button>
-                                <form method="POST" style="display:inline;">
-                                    <input type="hidden" name="action" value="delete_customer">
-                                    <input type="hidden" name="id" value="<?= $customer['id'] ?>">
-                                    <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete this customer?')">
-                                        <i class="fas fa-trash"></i>
+                    <?php
+                    if ($currentUser['role'] === 'guest') {
+                        foreach ($customers as $customer):
+                    ?>
+                            <tr>
+                                <td><strong><?= escape($customer['name']) ?></strong></td>
+                                <td><?= escape($customer['company_name'] ?? '-') ?></td>
+                                <td><?= escape($customer['email'] ?? '-') ?></td>
+                                <td><?= escape($customer['phone'] ?? '-') ?></td>
+                                <td>
+                                    <button class="btn btn-sm btn-outline-primary me-1" onclick="showAppModal('Demo Mode', 'This is sample data for demonstration purposes. Sign up to manage your own customers!', 'info')">
+                                        <i class="fas fa-eye"></i>
                                     </button>
-                                </form>
-                            </td>
-                        </tr>
-                    <?php endwhile; ?>
+                                    <span class="text-muted small">Demo - View Only</span>
+                                </td>
+                            </tr>
+                        <?php
+                        endforeach;
+                    } else {
+                        while ($customer = $customers->fetch_assoc()):
+                        ?>
+                            <tr>
+                                <td><?= escape($customer['name']) ?></td>
+                                <td><?= escape($customer['company_name'] ?? '-') ?></td>
+                                <td><?= escape($customer['email'] ?? '-') ?></td>
+                                <td><?= escape($customer['phone'] ?? '-') ?></td>
+                                <td>
+                                    <button class="btn btn-sm btn-outline-primary" onclick="editCustomer(<?= $customer['id'] ?>, '<?= escapeJs($customer['name']) ?>', '<?= escapeJs($customer['email'] ?? '') ?>', '<?= escapeJs($customer['phone'] ?? '') ?>', '<?= escapeJs($customer['address'] ?? '') ?>', '<?= escapeJs($customer['company_name'] ?? '') ?>')">
+                                        <i class="fas fa-edit"></i>
+                                    </button>
+                                    <form method="POST" style="display:inline;">
+                                        <input type="hidden" name="csrf_token" value="<?= generateCSRFToken() ?>">
+                                        <input type="hidden" name="action" value="delete_customer">
+                                        <input type="hidden" name="id" value="<?= $customer['id'] ?>">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete this customer?')">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                        <?php endwhile; ?>
+                    <?php } ?>
                 </tbody>
             </table>
         </div>
@@ -89,6 +177,7 @@ $customers = $conn->query("SELECT * FROM customers WHERE company_id = $companyId
             </div>
             <form method="POST">
                 <div class="modal-body">
+                    <input type="hidden" name="csrf_token" value="<?= generateCSRFToken() ?>">
                     <input type="hidden" name="action" value="add_customer">
                     <div class="mb-3">
                         <label class="form-label">Name</label>

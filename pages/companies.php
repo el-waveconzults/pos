@@ -24,6 +24,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->bind_param("ssssi", $_POST['name'], $_POST['email'], $_POST['phone'], $_POST['address'], $_POST['id']);
             $stmt->execute();
             $success = "Company updated successfully!";
+        } elseif ($action === 'approve_company') {
+            $companyId = intval($_POST['id']);
+            $conn->query("UPDATE companies SET status = 'active' WHERE id = $companyId");
+            $success = "Company registration approved and activated!";
         } elseif ($action === 'toggle_status') {
             $newStatus = $_POST['current_status'] === 'active' ? 'inactive' : 'active';
             $conn->query("UPDATE companies SET status = '$newStatus' WHERE id = " . intval($_POST['id']));
@@ -72,7 +76,10 @@ $totalUsers = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = '
 ?>
 
 <div class="d-flex justify-content-between align-items-center mb-4">
-    <h4><i class="fas fa-building"></i> Company Management</h4>
+    <div>
+        <h4><i class="fas fa-building"></i> Company Management</h4>
+        <p class="text-muted mb-0">Review pending company registrations here before activating them and issuing licenses.</p>
+    </div>
     <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#companyModal">
         <i class="fas fa-plus"></i> Add Company
     </button>
@@ -132,7 +139,7 @@ $totalUsers = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = '
                             <td><span class="badge bg-info"><?= $company['user_count'] ?></span></td>
                             <td><span class="badge bg-success"><?= $company['sales_count'] ?></span></td>
                             <td>
-                                <span class="badge bg-<?= $company['status'] == 'active' ? 'success' : 'secondary' ?>">
+                                <span class="badge bg-<?= $company['status'] == 'active' ? 'success' : ($company['status'] == 'pending' ? 'warning' : 'secondary') ?>">
                                     <?= ucfirst($company['status']) ?>
                                 </span>
                             </td>
@@ -141,15 +148,26 @@ $totalUsers = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = '
                                 <button class="btn btn-sm btn-outline-primary" onclick="editCompany(<?= $company['id'] ?>, '<?= addslashes($company['name']) ?>', '<?= $company['email'] ?>', '<?= addslashes($company['phone'] ?? '') ?>', '<?= addslashes($company['address'] ?? '') ?>')">
                                     <i class="fas fa-edit"></i>
                                 </button>
-                                <form method="POST" style="display:inline; margin-left: 4px;">
-                                    <input type="hidden" name="csrf_token" value="<?= generateCSRFToken() ?>">
-                                    <input type="hidden" name="action" value="toggle_status">
-                                    <input type="hidden" name="id" value="<?= $company['id'] ?>">
-                                    <input type="hidden" name="current_status" value="<?= $company['status'] ?>">
-                                    <button type="submit" class="btn btn-sm btn-outline-<?= $company['status'] == 'active' ? 'warning' : 'success' ?>">
-                                        <i class="fas fa-<?= $company['status'] == 'active' ? 'ban' : 'check' ?>"></i>
-                                    </button>
-                                </form>
+                                <?php if ($company['status'] === 'pending'): ?>
+                                    <form method="POST" style="display:inline; margin-left: 4px;">
+                                        <input type="hidden" name="csrf_token" value="<?= generateCSRFToken() ?>">
+                                        <input type="hidden" name="action" value="approve_company">
+                                        <input type="hidden" name="id" value="<?= $company['id'] ?>">
+                                        <button type="submit" class="btn btn-sm btn-outline-success" onclick="return confirm('Approve this company registration?')">
+                                            <i class="fas fa-check"></i>
+                                        </button>
+                                    </form>
+                                <?php else: ?>
+                                    <form method="POST" style="display:inline; margin-left: 4px;">
+                                        <input type="hidden" name="csrf_token" value="<?= generateCSRFToken() ?>">
+                                        <input type="hidden" name="action" value="toggle_status">
+                                        <input type="hidden" name="id" value="<?= $company['id'] ?>">
+                                        <input type="hidden" name="current_status" value="<?= $company['status'] ?>">
+                                        <button type="submit" class="btn btn-sm btn-outline-<?= $company['status'] == 'active' ? 'warning' : 'success' ?>">
+                                            <i class="fas fa-<?= $company['status'] == 'active' ? 'ban' : 'check' ?>"></i>
+                                        </button>
+                                    </form>
+                                <?php endif; ?>
                                 <form method="POST" style="display:inline; margin-left: 4px;">
                                     <input type="hidden" name="csrf_token" value="<?= generateCSRFToken() ?>">
                                     <input type="hidden" name="action" value="delete_company">

@@ -79,6 +79,7 @@ $totalCompanies = $conn->query("SELECT COUNT(*) as count FROM companies WHERE st
 $totalUsers = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = 'active'")->fetch_assoc()['count'] ?? 0;
 $totalSales = $conn->query("SELECT COALESCE(SUM(total_amount), 0) as total FROM sales WHERE status = 'completed'")->fetch_assoc()['total'] ?? 0;
 $pendingCompanies = $conn->query("SELECT COUNT(*) as count FROM companies WHERE status = 'pending'")->fetch_assoc()['count'] ?? 0;
+$pendingCompanyList = $conn->query("SELECT id, name, email, created_at FROM companies WHERE status = 'pending' ORDER BY created_at DESC LIMIT 10");
 
 // Subscription stats
 $activeSubscriptions = $conn->query("SELECT COUNT(*) as count FROM companies WHERE subscription_status = 'active'")->fetch_assoc()['count'] ?? 0;
@@ -117,6 +118,10 @@ for ($i = 11; $i >= 0; $i--) {
     $result = $conn->query("SELECT COALESCE(SUM(total_amount), 0) as total FROM sales WHERE DATE_FORMAT(created_at, '%Y-%m') = '$month' AND status = 'completed'");
     $monthlyRevenue[] = $result->fetch_assoc()['total'];
 }
+
+// Get license statistics
+$licenseManager = getLicenseManager();
+$licenseStats = $licenseManager->getLicenseStats();
 ?>
 
 <!-- OWNER DASHBOARD -->
@@ -197,6 +202,85 @@ for ($i = 11; $i >= 0; $i--) {
             </div>
         </div>
     </div>
+
+    <!-- License Stats -->
+    <div class="row mb-4">
+        <div class="col-md-12">
+            <div class="card border-0 shadow-sm" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                <div class="card-body">
+                    <div class="row align-items-center">
+                        <div class="col-md-3">
+                            <h6 class="mb-3"><i class="fas fa-key"></i> License Overview</h6>
+                            <div style="font-size: 24px; font-weight: bold;">
+                                <div><?= (int)$licenseStats['total'] ?> <small style="font-size: 12px;">Total Licenses</small></div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <h6 class="mb-3"><i class="fas fa-check-circle"></i> Active</h6>
+                            <div style="font-size: 28px; font-weight: bold; color: #4ade80;">
+                                <?= (int)$licenseStats['active'] ?>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <h6 class="mb-3"><i class="fas fa-pause-circle"></i> Suspended</h6>
+                            <div style="font-size: 28px; font-weight: bold; color: #facc15;">
+                                <?= (int)$licenseStats['suspended'] ?>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <h6 class="mb-3"><i class="fas fa-times-circle"></i> Expired</h6>
+                            <div style="font-size: 28px; font-weight: bold; color: #ff6b6b;">
+                                <?= (int)$licenseStats['expired'] ?>
+                            </div>
+                            <a href="?page=admin_licenses" class="btn btn-sm btn-light mt-3">Manage Licenses</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <?php if ($pendingCompanies > 0): ?>
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card shadow-sm">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <div>
+                            <h5 class="mb-0"><i class="fas fa-user-clock text-warning"></i> Pending Company Registrations</h5>
+                            <small class="text-muted">Review and approve new registrations before issuing licenses.</small>
+                        </div>
+                        <a href="?page=companies" class="btn btn-sm btn-primary">Review All Companies</a>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-sm mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Company</th>
+                                        <th>Email</th>
+                                        <th>Requested</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php while ($pendingCompany = $pendingCompanyList->fetch_assoc()): ?>
+                                        <tr>
+                                            <td><?= htmlspecialchars($pendingCompany['name'], ENT_QUOTES) ?></td>
+                                            <td><?= htmlspecialchars($pendingCompany['email'], ENT_QUOTES) ?></td>
+                                            <td><?= date('M d, Y', strtotime($pendingCompany['created_at'])) ?></td>
+                                            <td class="text-end">
+                                                <a href="?page=companies" class="btn btn-sm btn-outline-primary">Review</a>
+                                            </td>
+                                        </tr>
+                                    <?php endwhile; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    <?php endif; ?>
 
     <!-- Owner Email Outreach -->
     <div class="row mb-4">

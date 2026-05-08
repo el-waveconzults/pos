@@ -14,7 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt = $conn->prepare("INSERT INTO invoices (company_id, invoice_no, customer_id, due_date, subtotal, tax_amount, discount_amount, total_amount, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
         $due_date = $_POST['due_date'];
         $subtotal = floatval($_POST['subtotal']);
-        $tax = $subtotal * (TAX_RATE / 100);
+        $tax = $subtotal * (getTaxRate() / 100);
         $discount = floatval($_POST['discount']);
         $total = $subtotal + $tax - $discount;
         $stmt->bind_param("isisddsss", $companyId, $invoice_no, $_POST['customer_id'], $due_date, $subtotal, $tax, $discount, $total, $_POST['notes']);
@@ -216,7 +216,7 @@ $customers = $conn->query("SELECT * FROM customers WHERE company_id = $companyId
                     document.getElementById('invoiceDetailsContent').innerHTML = html;
                     new bootstrap.Modal(document.getElementById('invoiceDetailsModal')).show();
                 } else {
-                    alert(data.message);
+                    showAppModal(data.message, 'Invoice Error', 'danger');
                 }
             });
     }

@@ -5,46 +5,191 @@ $conn = getDB();
 $currentUser = getCurrentUser();
 $userRole = $currentUser['role'];
 
-// Redirect guest to login
-if ($userRole === 'guest') {
-    redirect('login.php');
-}
-
 // Get dashboard stats
 $companyId = $currentUser['company_id'] ?? 0;
 $today = date('Y-m-d');
 
-// Owner sees all companies, others see only their company
-$companyFilter = $userRole === 'owner' ? "" : "AND company_id = $companyId";
+// Build role-based filters
+$userIdFilter = "";
+$companyFilterSales = "";
+$companyFilterProducts = "";
+$companyFilterCustomers = "";
 
-$todaySales = $conn->query("SELECT COALESCE(SUM(total_amount), 0) as total FROM sales WHERE DATE(created_at) = '$today' AND status = 'completed' $companyFilter")->fetch_assoc()['total'];
-$todayOrders = $conn->query("SELECT COUNT(*) as count FROM sales WHERE DATE(created_at) = '$today' AND status = 'completed' $companyFilter")->fetch_assoc()['count'];
-$totalProducts = $conn->query("SELECT COUNT(*) as count FROM products WHERE status = 'active' $companyFilter")->fetch_assoc()['count'];
-$totalCustomers = $conn->query("SELECT COUNT(*) as count FROM customers WHERE status = 'active' $companyFilter")->fetch_assoc()['count'];
-$lowStock = $conn->query("SELECT COUNT(*) as count FROM products WHERE quantity <= min_quantity AND status = 'active' $companyFilter")->fetch_assoc()['count'];
+if ($userRole === 'cashier') {
+    // Cashiers only see their own sales
+    $userIdFilter = "AND s.created_by = ?";
+    $userIdValue = $currentUser['id'];
+} else if ($userRole !== 'owner') {
+    // Non-owners see only their company sales (through users table)
+    $companyFilterSales = "AND u.company_id = ?";
+    $companyFilterValue = $companyId;
+}
+
+// Regular admins and branch managers see only their company data
+if ($userRole !== 'owner' && $userRole !== 'cashier') {
+    $companyFilterProducts = "AND company_id = ?";
+    $companyFilterCustomers = "AND company_id = ?";
+}
+
+// Today's Sales - Join with users to get company_id
+if ($userRole === 'cashier') {
+    $stmt = $conn->prepare("SELECT COALESCE(SUM(total_amount), 0) as total 
+        FROM sales s 
+        WHERE DATE(s.created_at) = ? AND s.status = 'completed' AND s.created_by = ?");
+    $stmt->bind_param("si", $today, $currentUser['id']);
+} else if ($userRole === 'owner') {
+    $stmt = $conn->prepare("SELECT COALESCE(SUM(total_amount), 0) as total 
+        FROM sales s 
+        WHERE DATE(s.created_at) = ? AND s.status = 'completed'");
+    $stmt->bind_param("s", $today);
+} else {
+    $stmt = $conn->prepare("SELECT COALESCE(SUM(total_amount), 0) as total 
+        FROM sales s 
+        JOIN users u ON s.created_by = u.id
+        WHERE DATE(s.created_at) = ? AND s.status = 'completed' AND u.company_id = ?");
+    $stmt->bind_param("si", $today, $companyId);
+}
+$stmt->execute();
+$todaySales = $stmt->get_result()->fetch_assoc()['total'];
+
+// Today's Orders Count
+if ($userRole === 'cashier') {
+    $stmt = $conn->prepare("SELECT COUNT(*) as count 
+        FROM sales s 
+        WHERE DATE(s.created_at) = ? AND s.status = 'completed' AND s.created_by = ?");
+    $stmt->bind_param("si", $today, $currentUser['id']);
+} else if ($userRole === 'owner') {
+    $stmt = $conn->prepare("SELECT COUNT(*) as count 
+        FROM sales s 
+        WHERE DATE(s.created_at) = ? AND s.status = 'completed'");
+    $stmt->bind_param("s", $today);
+} else {
+    $stmt = $conn->prepare("SELECT COUNT(*) as count 
+        FROM sales s 
+        JOIN users u ON s.created_by = u.id
+        WHERE DATE(s.created_at) = ? AND s.status = 'completed' AND u.company_id = ?");
+    $stmt->bind_param("si", $today, $companyId);
+}
+$stmt->execute();
+$todayOrders = $stmt->get_result()->fetch_assoc()['count'];
+
+// Total Products
+if ($userRole === 'owner') {
+    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM products WHERE status = 'active'");
+    $stmt->execute();
+} else {
+    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM products WHERE status = 'active' AND company_id = ?");
+    $stmt->bind_param("i", $companyId);
+    $stmt->execute();
+}
+$totalProducts = $stmt->get_result()->fetch_assoc()['count'];
+
+// Total Customers
+if ($userRole === 'owner') {
+    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM customers WHERE status = 'active'");
+    $stmt->execute();
+} else {
+    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM customers WHERE status = 'active' AND company_id = ?");
+    $stmt->bind_param("i", $companyId);
+    $stmt->execute();
+}
+$totalCustomers = $stmt->get_result()->fetch_assoc()['count'];
+
+// Low Stock
+if ($userRole === 'owner') {
+    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM products WHERE quantity <= min_quantity AND status = 'active'");
+    $stmt->execute();
+} else {
+    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM products WHERE quantity <= min_quantity AND status = 'active' AND company_id = ?");
+    $stmt->bind_param("i", $companyId);
+    $stmt->execute();
+}
+$lowStock = $stmt->get_result()->fetch_assoc()['count'];
 
 // Get recent sales
-$recentSales = $conn->query("SELECT s.*, COALESCE(c.name, 'Walk-in Customer') as customer_name 
-    FROM sales s 
-    LEFT JOIN customers c ON s.customer_id = c.id 
-    WHERE 1=1 $companyFilter
-    ORDER BY s.created_at DESC LIMIT 10");
+if ($userRole === 'cashier') {
+    $stmt = $conn->prepare("SELECT s.*, COALESCE(c.name, 'Walk-in Customer') as customer_name, u.name as created_by_name
+        FROM sales s 
+        LEFT JOIN customers c ON s.customer_id = c.id
+        LEFT JOIN users u ON s.created_by = u.id
+        WHERE s.created_by = ?
+        ORDER BY s.created_at DESC LIMIT 10");
+    $stmt->bind_param("i", $currentUser['id']);
+} else if ($userRole === 'owner') {
+    $stmt = $conn->prepare("SELECT s.*, COALESCE(c.name, 'Walk-in Customer') as customer_name, u.name as created_by_name
+        FROM sales s 
+        LEFT JOIN customers c ON s.customer_id = c.id
+        LEFT JOIN users u ON s.created_by = u.id
+        ORDER BY s.created_at DESC LIMIT 10");
+} else {
+    $stmt = $conn->prepare("SELECT s.*, COALESCE(c.name, 'Walk-in Customer') as customer_name, u.name as created_by_name
+        FROM sales s 
+        LEFT JOIN customers c ON s.customer_id = c.id
+        LEFT JOIN users u ON s.created_by = u.id
+        WHERE u.company_id = ?
+        ORDER BY s.created_at DESC LIMIT 10");
+    $stmt->bind_param("i", $companyId);
+}
+$stmt->execute();
+$recentSales = $stmt->get_result();
 
 // Get top products
-$topProducts = $conn->query("SELECT p.name, SUM(si.quantity) as total_qty, SUM(si.total_price) as total_sales 
-    FROM sale_items si 
-    JOIN products p ON si.product_id = p.id 
-    JOIN sales s ON si.sale_id = s.id 
-    WHERE s.status = 'completed' $companyFilter
-    GROUP BY p.id 
-    ORDER BY total_sales DESC LIMIT 5");
+if ($userRole === 'cashier') {
+    $stmt = $conn->prepare("SELECT p.name, SUM(si.quantity) as total_qty, SUM(si.total_price) as total_sales 
+        FROM sale_items si 
+        JOIN products p ON si.product_id = p.id 
+        JOIN sales s ON si.sale_id = s.id 
+        WHERE s.status = 'completed' AND s.created_by = ?
+        GROUP BY p.id 
+        ORDER BY total_sales DESC LIMIT 5");
+    $stmt->bind_param("i", $currentUser['id']);
+} else if ($userRole === 'owner') {
+    $stmt = $conn->prepare("SELECT p.name, SUM(si.quantity) as total_qty, SUM(si.total_price) as total_sales 
+        FROM sale_items si 
+        JOIN products p ON si.product_id = p.id 
+        JOIN sales s ON si.sale_id = s.id 
+        WHERE s.status = 'completed'
+        GROUP BY p.id 
+        ORDER BY total_sales DESC LIMIT 5");
+} else {
+    $stmt = $conn->prepare("SELECT p.name, SUM(si.quantity) as total_qty, SUM(si.total_price) as total_sales 
+        FROM sale_items si 
+        JOIN products p ON si.product_id = p.id 
+        JOIN sales s ON si.sale_id = s.id 
+        JOIN users u ON s.created_by = u.id
+        WHERE s.status = 'completed' AND u.company_id = ?
+        GROUP BY p.id 
+        ORDER BY total_sales DESC LIMIT 5");
+    $stmt->bind_param("i", $companyId);
+}
+$stmt->execute();
+$topProducts = $stmt->get_result();
 
 // Monthly sales data
 $monthlySales = [];
 for ($i = 11; $i >= 0; $i--) {
     $month = date('Y-m', strtotime("-$i months"));
-    $result = $conn->query("SELECT COALESCE(SUM(total_amount), 0) as total FROM sales WHERE DATE_FORMAT(created_at, '%Y-%m') = '$month' AND status = 'completed' $companyFilter");
-    $monthlySales[] = $result->fetch_assoc()['total'];
+
+    if ($userRole === 'cashier') {
+        $stmt = $conn->prepare("SELECT COALESCE(SUM(total_amount), 0) as total 
+            FROM sales 
+            WHERE DATE_FORMAT(created_at, '%Y-%m') = ? AND status = 'completed' AND created_by = ?");
+        $stmt->bind_param("si", $month, $currentUser['id']);
+    } else if ($userRole === 'owner') {
+        $stmt = $conn->prepare("SELECT COALESCE(SUM(total_amount), 0) as total 
+            FROM sales 
+            WHERE DATE_FORMAT(created_at, '%Y-%m') = ? AND status = 'completed'");
+        $stmt->bind_param("s", $month);
+    } else {
+        $stmt = $conn->prepare("SELECT COALESCE(SUM(total_amount), 0) as total 
+            FROM sales s
+            JOIN users u ON s.created_by = u.id
+            WHERE DATE_FORMAT(s.created_at, '%Y-%m') = ? AND s.status = 'completed' AND u.company_id = ?");
+        $stmt->bind_param("si", $month, $companyId);
+    }
+
+    $stmt->execute();
+    $monthlySales[] = $stmt->get_result()->fetch_assoc()['total'];
 }
 ?>
 
@@ -216,7 +361,22 @@ for ($i = 11; $i >= 0; $i--) {
                     <h5 class="mb-0">Monthly Sales Trend</h5>
                 </div>
                 <div class="card-body">
-                    <canvas id="salesChart" height="80"></canvas>
+                    <canvas id="salesChart" height="80" style="cursor: pointer;" onclick="showFullChart()"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Full Chart Modal -->
+    <div class="modal fade" id="chartModal" tabindex="-1" aria-labelledby="chartModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="chartModalLabel">Monthly Sales Trend - Full View</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <canvas id="fullSalesChart" height="200"></canvas>
                 </div>
             </div>
         </div>
@@ -224,16 +384,21 @@ for ($i = 11; $i >= 0; $i--) {
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
+        // Data for charts
+        const chartLabels = ['<?= implode("','", array_map(function ($i) {
+                                    return date('M Y', strtotime("-$i months"));
+                                }, range(11, 0))) ?>'];
+        const chartData = <?= json_encode($monthlySales) ?>;
+
+        // Small chart
         const ctx = document.getElementById('salesChart').getContext('2d');
-        new Chart(ctx, {
+        const smallChart = new Chart(ctx, {
             type: 'line',
             data: {
-                labels: ['<?= implode("','", array_map(function ($i) {
-                                return date('M', strtotime("-$i months"));
-                            }, range(11, 0))) ?>'],
+                labels: chartLabels,
                 datasets: [{
                     label: 'Sales',
-                    data: <?= json_encode($monthlySales) ?>,
+                    data: chartData,
                     borderColor: '#3498db',
                     backgroundColor: 'rgba(52, 152, 219, 0.1)',
                     fill: true,
@@ -254,5 +419,79 @@ for ($i = 11; $i >= 0; $i--) {
                 }
             }
         });
+
+        // Function to show full chart modal
+        function showFullChart() {
+            // Show modal
+            const modal = new bootstrap.Modal(document.getElementById('chartModal'));
+            modal.show();
+
+            // Create full chart after modal is shown
+            setTimeout(() => {
+                const fullCtx = document.getElementById('fullSalesChart').getContext('2d');
+                new Chart(fullCtx, {
+                    type: 'line',
+                    data: {
+                        labels: chartLabels,
+                        datasets: [{
+                            label: 'Monthly Sales',
+                            data: chartData,
+                            borderColor: '#3498db',
+                            backgroundColor: 'rgba(52, 152, 219, 0.2)',
+                            fill: true,
+                            tension: 0.4,
+                            pointBackgroundColor: '#3498db',
+                            pointBorderColor: '#fff',
+                            pointBorderWidth: 2,
+                            pointRadius: 6,
+                            pointHoverRadius: 8
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: true,
+                                position: 'top'
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        return 'Sales: ' + new Intl.NumberFormat('en-US', {
+                                            style: 'currency',
+                                            currency: 'USD'
+                                        }).format(context.parsed.y);
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                ticks: {
+                                    callback: function(value) {
+                                        return new Intl.NumberFormat('en-US', {
+                                            style: 'currency',
+                                            currency: 'USD',
+                                            minimumFractionDigits: 0
+                                        }).format(value);
+                                    }
+                                }
+                            },
+                            x: {
+                                grid: {
+                                    display: false
+                                }
+                            }
+                        },
+                        interaction: {
+                            intersect: false,
+                            mode: 'index'
+                        }
+                    }
+                });
+            }, 300);
+        }
     </script>
 <?php endif; ?>

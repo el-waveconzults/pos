@@ -56,7 +56,7 @@ try {
     $createdAt = $input['created_at'] ?? date('Y-m-d H:i:s');
 
     $stmt->bind_param(
-        "sddddsdsssss",
+        "sidddddsdiss",
         $invoiceNo,
         $customerId,
         $input['subtotal'],

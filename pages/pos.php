@@ -8,15 +8,26 @@ $companyId = $currentUser['company_id'] ?? 0;
 // Get categories for filter (only this company's categories)
 $categories = $conn->query("SELECT * FROM categories WHERE company_id = $companyId ORDER BY name");
 
-// Get all active products (only this company's products)
+// Get all active products (only this company's products, or guest catalog for guests)
+$companyFilter = $companyId > 0 ? "p.company_id = $companyId" : "p.company_id = 0";
 $products = $conn->query("SELECT p.*, c.name as category_name 
     FROM products p 
     LEFT JOIN categories c ON p.category_id = c.id 
-    WHERE p.company_id = $companyId AND p.status = 'active' AND p.quantity > 0 
+    WHERE $companyFilter AND p.status = 'active' AND p.quantity >= 0 
     ORDER BY p.name");
 
 // Get customers for dropdown (only this company's customers)
 $customers = $conn->query("SELECT * FROM customers WHERE company_id = $companyId AND status = 'active' ORDER BY name");
+
+// Get low stock alert threshold
+$settings = getSettings();
+$lowStockThreshold = intval($settings['low_stock_alert'] ?? 10);
+
+// Get current company info for receipt header
+$company = getCompany($companyId);
+$companyName = $company['name'] ?? ($settings['company_name'] ?? getAppName());
+$companyAddress = $company['address'] ?? ($settings['company_address'] ?? '');
+$companyPhone = $company['phone'] ?? ($settings['company_phone'] ?? '');
 ?>
 
 <div class="row">
@@ -37,7 +48,7 @@ $customers = $conn->query("SELECT * FROM customers WHERE company_id = $companyId
                         </select>
                     </div>
                     <div class="col-md-2">
-                        <input type="text" id="barcodeScan" class="form-control" placeholder="Scan barcode...">
+                        <input type="text" id="barcodeScan" class="form-control" placeholder="Scan barcode..." style="font-weight: bold; font-size: 16px; border: 2px solid #007bff;">
                     </div>
                     <div class="col-md-2">
                         <button class="btn btn-outline-primary w-100" onclick="scanBarcode()">
@@ -45,12 +56,20 @@ $customers = $conn->query("SELECT * FROM customers WHERE company_id = $companyId
                         </button>
                     </div>
                 </div>
+                <div class="row mt-2">
+                    <div class="col-12">
+                        <small class="text-muted" id="barcodeDebugLabel">Last scanned barcode: <span id="barcodeDebugValue">none</span></small>
+                    </div>
+                </div>
             </div>
             <div class="card-body">
                 <div class="row" id="productGrid">
                     <?php while ($product = $products->fetch_assoc()): ?>
                         <div class="col-md-4 mb-3 product-item" data-category="<?= $product['category_id'] ?>" data-barcode="<?= $product['barcode'] ?? '' ?>">
-                            <div class="card product-card h-100" onclick="addToCart(<?= $product['id'] ?>, '<?= addslashes($product['name']) ?>', <?= $product['sell_price'] ?>, <?= $product['quantity'] ?>)" style="cursor: pointer;">
+                            <div class="card product-card h-100" onclick="addToCart(<?= $product['id'] ?>, '<?= addslashes($product['name']) ?>', <?= $product['sell_price'] ?>, <?= $product['quantity'] ?>)" style="cursor: pointer; position: relative;">
+                                <?php if ($product['quantity'] <= $lowStockThreshold): ?>
+                                    <span class="badge bg-danger position-absolute" style="top: 10px; right: 10px;">Low Stock</span>
+                                <?php endif; ?>
                                 <div class="card-body text-center">
                                     <?php if ($product['image'] && file_exists($product['image'])): ?>
                                         <img src="<?= $product['image'] ?>" alt="<?= $product['name'] ?>" style="width: 80px; height: 80px; object-fit: cover; border-radius: 5px; margin-bottom: 10px;">
@@ -120,7 +139,7 @@ $customers = $conn->query("SELECT * FROM customers WHERE company_id = $companyId
                     <span id="subtotal"><?= formatCurrency(0) ?></span>
                 </div>
                 <div class="d-flex justify-content-between mb-2">
-                    <span>Tax (<?= TAX_RATE ?>%):</span>
+                    <span>Tax (<?= getTaxRate() ?>%):</span>
                     <span id="taxAmount"><?= formatCurrency(0) ?></span>
                 </div>
                 <div class="d-flex justify-content-between mb-2">
@@ -152,6 +171,12 @@ $customers = $conn->query("SELECT * FROM customers WHERE company_id = $companyId
                 <div class="d-flex justify-content-between mb-3">
                     <span>Change:</span>
                     <span id="changeAmount"><?= formatCurrency(0) ?></span>
+                </div>
+
+                <!-- Offline Sync Status -->
+                <div id="offlineStatus" class="alert alert-warning py-2 mb-3" style="display: none;">
+                    <small><i class="fas fa-exclamation-triangle"></i> <span id="offlineCount">0</span> sales pending sync</small>
+                    <button class="btn btn-sm btn-outline-warning ms-2" onclick="syncOfflineSales()">Sync Now</button>
                 </div>
 
                 <!-- Complete Sale Button -->
@@ -193,10 +218,10 @@ $receiptFooter = $receiptSettings['receipt_footer'] ?? 'Thank you for your patro
         <?php if ($showLogo === '1' && !empty($receiptSettings['company_logo'])): ?>
             <img src="<?= $receiptSettings['company_logo'] ?>" alt="Logo" style="max-height: 60px; margin-bottom: 10px;">
         <?php endif; ?>
-        <h4 style="margin: 0;"><?= getAppName() ?></h4>
+        <h4 style="margin: 0;"><?= htmlspecialchars($companyName) ?></h4>
         <?php if ($showInfo === '1'): ?>
-            <p style="margin: 5px 0; font-size: 10px;"><?= $receiptSettings['company_address'] ?? '' ?></p>
-            <p style="margin: 5px 0; font-size: 10px;"><?= $receiptSettings['company_phone'] ?? '' ?></p>
+            <p style="margin: 5px 0; font-size: 10px;"><?= htmlspecialchars($companyAddress) ?></p>
+            <p style="margin: 5px 0; font-size: 10px;"><?= htmlspecialchars($companyPhone) ?></p>
         <?php endif; ?>
         <p style="margin: 5px 0;">Invoice: <span id="receiptInvoice"></span></p>
         <p style="margin: 5px 0;">Date: <span id="receiptDate"></span> <span id="receiptTime"></span></p>
@@ -222,7 +247,7 @@ $receiptFooter = $receiptSettings['receipt_footer'] ?? 'Thank you for your patro
             <span id="receiptSubtotal"></span>
         </div>
         <div style="display: flex; justify-content: space-between;">
-            <span>Tax (<?= TAX_RATE ?>%):</span>
+            <span>Tax (<?= getTaxRate() ?>%):</span>
             <span id="receiptTax"></span>
         </div>
         <div style="display: flex; justify-content: space-between;" id="discountLine">
@@ -253,11 +278,12 @@ $receiptFooter = $receiptSettings['receipt_footer'] ?? 'Thank you for your patro
     <div style="text-align: center; font-size: 10px; padding-top: 10px;">
         <p style="margin: 5px 0;"><?= $receiptFooter ?></p>
         <div style="margin-top: 10px; border-top: 1px dashed #000; padding-top: 10px;">
-            <p style="margin: 5px 0; font-size: 9px;">Powered by <?= getAppName() ?></p>
+            <p style="margin: 5px 0; font-size: 9px;">Powered by <?= htmlspecialchars($companyName) ?></p>
         </div>
     </div>
 </div>
 
+<script src="/pos/js/offline-manager.js"></script>
 <script>
     let cart = [];
 
@@ -267,7 +293,9 @@ $receiptFooter = $receiptSettings['receipt_footer'] ?? 'Thank you for your patro
             if (existing.quantity < stock) {
                 existing.quantity++;
             } else {
-                alert('Not enough stock!');
+                waitForShowAppModal().then(() => {
+                    showAppModal('Not enough stock!', 'Stock Alert', 'warning');
+                });
                 return;
             }
         } else {
@@ -332,7 +360,7 @@ $receiptFooter = $receiptSettings['receipt_footer'] ?? 'Thank you for your patro
 
     function updateTotals() {
         const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-        const taxRate = <?= TAX_RATE ?>;
+        const taxRate = <?= getTaxRate() ?>;
         const tax = subtotal * (taxRate / 100);
         const discount = parseFloat(document.getElementById('discount').value) || 0;
         const total = subtotal + tax - discount;
@@ -365,7 +393,9 @@ $receiptFooter = $receiptSettings['receipt_footer'] ?? 'Thank you for your patro
 
     function completeSale() {
         if (cart.length === 0) {
-            alert('Cart is empty!');
+            waitForShowAppModal().then(() => {
+                showAppModal('Cart is empty!', 'Cart Alert', 'warning');
+            });
             return;
         }
 
@@ -376,7 +406,9 @@ $receiptFooter = $receiptSettings['receipt_footer'] ?? 'Thank you for your patro
         const discount = parseFloat(document.getElementById('discount').value) || 0;
 
         if (paymentMethod === 'cash' && amountPaid < total) {
-            alert('Insufficient payment!');
+            waitForShowAppModal().then(() => {
+                showAppModal('Insufficient payment!', 'Payment Alert', 'warning');
+            });
             return;
         }
 
@@ -405,12 +437,51 @@ $receiptFooter = $receiptSettings['receipt_footer'] ?? 'Thank you for your patro
                     document.getElementById('amountPaid').value = '0';
                     calculateChange();
                 } else {
-                    alert('Sale failed: ' + data.message);
+                    waitForShowAppModal().then(() => {
+                        showAppModal('Sale failed: ' + data.message, 'Sale Error', 'danger');
+                    });
                 }
             })
-            .catch(error => {
+            .catch(async error => {
                 console.error('Error:', error);
-                alert('Sale failed: ' + error.message);
+
+                // Try to save offline if online request failed
+                if (window.posOfflineManager && window.posOfflineManager.ready) {
+                    try {
+                        const saleData = {
+                            cart: cart,
+                            customer_id: customerId || '',
+                            discount: discount,
+                            payment_method: paymentMethod,
+                            amount_paid: amountPaid,
+                            timestamp: new Date().toISOString(),
+                            user_id: <?= json_encode($currentUser['id']) ?>,
+                            company_id: <?= json_encode($companyId) ?>
+                        };
+
+                        await window.posOfflineManager.saveSaleOffline(saleData);
+                        waitForShowAppModal().then(() => {
+                            showAppModal('Sale saved offline. Will sync when connection is restored.', 'Offline Sale', 'warning');
+                        });
+
+                        // Clear cart and reset form
+                        cart = [];
+                        renderCart();
+                        document.getElementById('amountPaid').value = '0';
+                        calculateChange();
+
+                        // Update offline status indicator
+                        console.log('Offline sale saved, checking status...');
+                        await checkOfflineSales();
+                        return;
+                    } catch (offlineError) {
+                        console.error('Offline save failed:', offlineError);
+                    }
+                }
+
+                waitForShowAppModal().then(() => {
+                    showAppModal('Sale failed: ' + error.message, 'Sale Error', 'danger');
+                });
             });
     }
 
@@ -429,7 +500,7 @@ $receiptFooter = $receiptSettings['receipt_footer'] ?? 'Thank you for your patro
         ).join('');
 
         const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-        const tax = subtotal * (<?= TAX_RATE ?> / 100);
+        const tax = subtotal * (<?= getTaxRate() ?> / 100);
         const discount = parseFloat(document.getElementById('discount').value) || 0;
         const total = subtotal + tax - discount;
         const paymentMethod = document.getElementById('paymentMethod').value;
@@ -439,16 +510,16 @@ $receiptFooter = $receiptSettings['receipt_footer'] ?? 'Thank you for your patro
         // Build receipt HTML
         const showLogo = '<?= $showLogo === '1' && !empty($receiptSettings['company_logo']) ? '1' : '0' ?>';
         const showInfo = '<?= $showInfo === '1' ? '1' : '0' ?>';
-        const appName = '<?= getAppName() ?>';
+        const companyName = '<?= addslashes($companyName) ?>';
         const receiptFooter = '<?= addslashes($receiptFooter) ?>';
 
-        let headerHtml = `<h4 style="margin: 0;">${appName}</h4>`;
+        let headerHtml = `<h4 style="margin: 0;">${companyName}</h4>`;
         if (showLogo === '1') {
             headerHtml = `<img src="<?= $receiptSettings['company_logo'] ?? '' ?>" alt="Logo" style="max-height: 60px; margin-bottom: 10px;">` + headerHtml;
         }
         if (showInfo === '1') {
-            headerHtml += `<p style="margin: 5px 0; font-size: 10px;"><?= addslashes($receiptSettings['company_address'] ?? '') ?></p>` +
-                `<p style="margin: 5px 0; font-size: 10px;"><?= addslashes($receiptSettings['company_phone'] ?? '') ?></p>`;
+            headerHtml += `<p style="margin: 5px 0; font-size: 10px;"><?= addslashes($companyAddress) ?></p>` +
+                `<p style="margin: 5px 0; font-size: 10px;"><?= addslashes($companyPhone) ?></p>`;
         }
         headerHtml += `<p style="margin: 5px 0;">Invoice: ${invoiceNo}</p><p style="margin: 5px 0;">Date: ${dateStr} ${timeStr}</p>`;
 
@@ -475,7 +546,7 @@ $receiptFooter = $receiptSettings['receipt_footer'] ?? 'Thank you for your patro
                     <span>₦${subtotal.toFixed(2)}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between;">
-                    <span>Tax (<?= TAX_RATE ?>%):</span>
+                    <span>Tax (<?= getTaxRate() ?>%):</span>
                     <span>₦${tax.toFixed(2)}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between;">
@@ -504,7 +575,7 @@ $receiptFooter = $receiptSettings['receipt_footer'] ?? 'Thank you for your patro
             <div style="text-align: center; font-size: 10px; padding-top: 10px;">
                 <p style="margin: 5px 0;">${receiptFooter}</p>
                 <div style="margin-top: 10px; border-top: 1px dashed #000; padding-top: 10px;">
-                    <p style="margin: 5px 0; font-size: 9px;">Powered by ${appName}</p>
+                    <p style="margin: 5px 0; font-size: 9px;">Powered by ${companyName}</p>
                 </div>
             </div>
         `;
@@ -587,25 +658,91 @@ $receiptFooter = $receiptSettings['receipt_footer'] ?? 'Thank you for your patro
         });
     });
 
-    // Barcode scanner
-    document.getElementById('barcodeScan').addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') {
+    // Enhanced Barcode scanner with global listener
+    let barcodeBuffer = '';
+    let lastKeyTime = 0;
+
+    // Global keydown listener for barcode scanner
+    document.addEventListener('keydown', function(e) {
+        const currentTime = Date.now();
+
+        // If it's been more than 100ms since last key, clear buffer (new scan)
+        if (currentTime - lastKeyTime > 100) {
+            barcodeBuffer = '';
+        }
+
+        lastKeyTime = currentTime;
+
+        // Only capture numeric keys and common barcode characters
+        if (e.key.match(/[0-9a-zA-Z\-_.]/) && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+            barcodeBuffer += e.key;
+
+            // Clear buffer after 500ms of inactivity
+            setTimeout(() => {
+                if (Date.now() - lastKeyTime > 500) {
+                    processBarcodeScan(barcodeBuffer);
+                    barcodeBuffer = '';
+                }
+            }, 500);
+        }
+
+        // Also handle the input field method
+        if (e.target.id === 'barcodeScan' && e.key === 'Enter') {
+            e.preventDefault();
             scanBarcode();
         }
     });
 
+    function updateBarcodeDebug(value) {
+        const debugValue = document.getElementById('barcodeDebugValue');
+        if (debugValue) {
+            debugValue.textContent = value || 'none';
+        }
+    }
+
+    function processBarcodeScan(barcode) {
+        if (!barcode || barcode.length < 3) return; // Ignore short inputs
+
+        updateBarcodeDebug(barcode);
+
+        // Focus the barcode input and set value
+        const barcodeInput = document.getElementById('barcodeScan');
+        barcodeInput.value = barcode;
+        barcodeInput.focus();
+
+        // Add visual feedback
+        barcodeInput.style.backgroundColor = '#e8f5e9';
+        setTimeout(() => {
+            barcodeInput.style.backgroundColor = '';
+        }, 200);
+
+        // Process the barcode
+        scanBarcode();
+    }
+
     function scanBarcode() {
         const barcode = document.getElementById('barcodeScan').value.trim();
-        if (!barcode) return;
+        if (!barcode) {
+            updateBarcodeDebug('none');
+            return;
+        }
+
+        updateBarcodeDebug(barcode);
 
         const productItems = document.querySelectorAll('.product-item');
         let found = false;
 
         productItems.forEach(item => {
             const itemBarcode = item.getAttribute('data-barcode');
-            if (itemBarcode && itemBarcode === barcode) {
+            if (itemBarcode && itemBarcode.trim() === barcode) {
                 const card = item.querySelector('.product-card');
                 if (card) {
+                    // Add visual feedback to the found product
+                    card.style.border = '3px solid #28a745';
+                    setTimeout(() => {
+                        card.style.border = '';
+                    }, 500);
+
                     card.click();
                     found = true;
                 }
@@ -613,11 +750,206 @@ $receiptFooter = $receiptSettings['receipt_footer'] ?? 'Thank you for your patro
         });
 
         if (!found) {
-            alert('Product not found for barcode: ' + barcode);
+            // Show error with sound/beep if possible
+            const barcodeInput = document.getElementById('barcodeScan');
+            barcodeInput.style.backgroundColor = '#f8d7da';
+            setTimeout(() => {
+                barcodeInput.style.backgroundColor = '';
+            }, 1000);
+
+            waitForShowAppModal().then(() => {
+                showAppModal('Product not found for barcode: ' + barcode, 'Barcode Error', 'danger');
+            });
         }
 
         document.getElementById('barcodeScan').value = '';
     }
+
+    // Offline sync functions
+    async function checkOfflineSales() {
+        // Wait for offline manager to be ready
+        if (!window.posOfflineManager) {
+            // Retry after a short delay if manager isn't loaded yet
+            setTimeout(checkOfflineSales, 500);
+            return;
+        }
+
+        // Wait for initialization to complete
+        if (window.posOfflineManager.initPromise) {
+            try {
+                await window.posOfflineManager.initPromise;
+            } catch (error) {
+                console.error('Offline manager initialization failed:', error);
+                return;
+            }
+        }
+
+        if (window.posOfflineManager && window.posOfflineManager.ready) {
+            try {
+                const offlineSales = await window.posOfflineManager.getOfflineSales();
+                const pendingSales = offlineSales.filter(s => !s.synced);
+                const offlineStatus = document.getElementById('offlineStatus');
+                const offlineCount = document.getElementById('offlineCount');
+
+                console.log('Offline sales check:', pendingSales.length, 'pending sales');
+
+                // Always hide offline status
+                offlineStatus.style.display = 'none';
+            } catch (error) {
+                console.error('Error checking offline sales:', error);
+            }
+        } else {
+            // Retry if not ready yet
+            setTimeout(checkOfflineSales, 1000);
+        }
+    }
+
+    async function syncOfflineSales() {
+        if (!window.posOfflineManager || !window.posOfflineManager.ready) {
+            waitForShowAppModal().then(() => {
+                showAppModal('Offline manager not ready', 'Sync Error', 'danger');
+            });
+            return;
+        }
+
+        try {
+            const offlineSales = await window.posOfflineManager.getOfflineSales();
+            console.log('Found offline sales to sync:', offlineSales.length);
+
+            if (offlineSales.length === 0) {
+                waitForShowAppModal().then(() => {
+                    showAppModal('No pending offline sales to sync.', 'Sync Status', 'info');
+                });
+                return;
+            }
+
+            let syncedCount = 0;
+            let failedCount = 0;
+
+            for (const sale of offlineSales) {
+                try {
+                    console.log('Syncing sale:', sale.id);
+                    // Prepare data for sync API
+                    const syncData = {
+                        customer_id: sale.customer_id || '',
+                        subtotal: sale.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0),
+                        tax_amount: (sale.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0) * (<?= getTaxRate() ?> / 100)),
+                        discount_amount: sale.discount || 0,
+                        total_amount: sale.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0) +
+                            (sale.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0) * (<?= getTaxRate() ?> / 100)) -
+                            (sale.discount || 0),
+                        payment_method: sale.payment_method || 'cash',
+                        amount_paid: sale.amount_paid || 0,
+                        amount_change: (sale.amount_paid || 0) - (sale.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0) +
+                            (sale.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0) * (<?= getTaxRate() ?> / 100)) -
+                            (sale.discount || 0)),
+                        items: sale.cart.map(item => ({
+                            product_id: item.id,
+                            quantity: item.quantity,
+                            unit_price: item.price,
+                            total_price: item.price * item.quantity
+                        })),
+                        created_by: sale.user_id || <?= json_encode($currentUser['id']) ?>,
+                        created_at: sale.timestamp
+                    };
+
+                    const response = await fetch('api/sync-sale.php', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(syncData)
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        console.log('Sync response for sale', sale.id, ':', data);
+                        if (data.success) {
+                            await window.posOfflineManager.removeOfflineSale(sale.id);
+                            syncedCount++;
+                        } else {
+                            console.error('Sync failed for sale:', sale.id, data.message);
+                        }
+                    } else {
+                        console.error('HTTP error syncing sale:', sale.id, response.status, response.statusText);
+                        const errorText = await response.text();
+                        console.error('Error response:', errorText);
+                    }
+                } catch (error) {
+                    console.error('Failed to sync sale:', sale.id, error);
+                }
+            }
+
+            if (syncedCount > 0) {
+                waitForShowAppModal().then(() => {
+                    showAppModal(`${syncedCount} sale(s) synced successfully!`, 'Sync Complete', 'success');
+                });
+                checkOfflineSales(); // Update the status
+            } else {
+                waitForShowAppModal().then(() => {
+                    showAppModal('No sales were synced. Check your connection and try again.', 'Sync Failed', 'warning');
+                });
+            }
+        } catch (error) {
+            console.error('Sync error:', error);
+            waitForShowAppModal().then(() => {
+                showAppModal('Sync failed: ' + error.message, 'Sync Error', 'danger');
+            });
+        }
+    }
+
+    // Wait for showAppModal to be available
+    function waitForShowAppModal() {
+        return new Promise((resolve) => {
+            if (typeof showAppModal === 'function') {
+                resolve();
+            } else {
+                const checkInterval = setInterval(() => {
+                    if (typeof showAppModal === 'function') {
+                        clearInterval(checkInterval);
+                        resolve();
+                    }
+                }, 50);
+                // Timeout after 5 seconds
+                setTimeout(() => {
+                    clearInterval(checkInterval);
+                    resolve();
+                }, 5000);
+            }
+        });
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+        document.getElementById('barcodeScan').focus();
+        // Check for offline sales on page load
+        checkOfflineSales();
+    });
+
+    // Make checkOfflineSales globally accessible for index.php to call
+    window.checkOfflineSales = checkOfflineSales;
+    window.debugOfflineStatus = async function() {
+        console.log('Debug: Checking offline status...');
+        console.log('posOfflineManager exists:', !!window.posOfflineManager);
+        if (window.posOfflineManager) {
+            console.log('ready:', window.posOfflineManager.ready);
+            console.log('initPromise:', window.posOfflineManager.initPromise);
+            if (window.posOfflineManager.ready) {
+                try {
+                    const sales = await window.posOfflineManager.getOfflineSales();
+                    console.log('Offline sales in storage:', sales);
+                } catch (error) {
+                    console.error('Error getting offline sales:', error);
+                }
+            }
+        }
+        await checkOfflineSales();
+    };
+
+    document.addEventListener('click', function(e) {
+        // Don't auto-focus if clicking on input fields or buttons
+        if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON' && e.target.tagName !== 'SELECT' && e.target.tagName !== 'TEXTAREA') {
+            document.getElementById('barcodeScan').focus();
+        }
+    });
 </script>
 
 <style>

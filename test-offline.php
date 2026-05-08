@@ -136,7 +136,35 @@ $offlineTest = [
         </div>
     </div>
 
+    <!-- Offline alert modal -->
+    <div class="modal fade" id="offlineAlertModal" tabindex="-1" aria-labelledby="offlineAlertModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="offlineAlertModalLabel">Notice</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="offlineAlertModalMessage"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
+        function showOfflineModal(message, title = 'Notice', type = 'info') {
+            const titleEl = document.getElementById('offlineAlertModalLabel');
+            const messageEl = document.getElementById('offlineAlertModalMessage');
+            const modalEl = document.getElementById('offlineAlertModal');
+            titleEl.textContent = title;
+            messageEl.innerHTML = `<div class="alert alert-${type} mb-0">${message}</div>`;
+            const modal = new bootstrap.Modal(modalEl);
+            modal.show();
+        }
+
         // Check browser features
         function checkBrowserSupport() {
             // Service Worker
@@ -162,7 +190,7 @@ $offlineTest = [
 
         async function testOfflineStorage() {
             if (!('indexedDB' in window)) {
-                alert('IndexedDB not supported in this browser');
+                showOfflineModal('IndexedDB not supported in this browser', 'Compatibility Error', 'danger');
                 return;
             }
 
@@ -173,11 +201,11 @@ $offlineTest = [
                 const data = await getTestData(db);
                 db.close();
 
-                alert('Offline storage test successful! Data stored and retrieved.');
+                showOfflineModal('Offline storage test successful! Data stored and retrieved.', 'Offline Storage', 'success');
                 console.log('Test data:', data);
             } catch (error) {
                 console.error('Offline storage test failed:', error);
-                alert('Offline storage test failed. Check console for details.');
+                showOfflineModal('Offline storage test failed. Check console for details.', 'Offline Storage', 'danger');
             }
         }
 
@@ -223,23 +251,24 @@ $offlineTest = [
 
         async function testServiceWorker() {
             if (!('serviceWorker' in navigator)) {
-                alert('Service Worker not supported in this browser');
+                showOfflineModal('Service Worker not supported in this browser', 'Compatibility Error', 'danger');
                 return;
             }
 
             try {
                 const registration = await navigator.serviceWorker.register('/sw.js');
-                alert('Service Worker registered successfully!');
+                showOfflineModal('Service Worker registered successfully!', 'Service Worker', 'success');
                 console.log('SW registered:', registration);
             } catch (error) {
                 console.error('Service Worker registration failed:', error);
-                alert('Service Worker registration failed. Check console for details.');
+                showOfflineModal('Service Worker registration failed. Check console for details.', 'Service Worker', 'danger');
             }
         }
 
         // Run checks on load
         checkBrowserSupport();
     </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 
 </html>

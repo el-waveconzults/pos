@@ -11,14 +11,48 @@ class POSOfflineManager {
 
     async init() {
         try {
+            console.log('Offline manager: Starting initialization...');
             await this.openDB();
+            
+            // If online and there are pending sales older than 1 hour, clear them (likely test data)
+            if (this.isOnline) {
+                const sales = await this.getOfflineSales();
+                const oneHourAgo = Date.now() - (60 * 60 * 1000);
+                for (const sale of sales) {
+                    const saleTime = new Date(sale.timestamp).getTime();
+                    if (saleTime < oneHourAgo && !sale.synced) {
+                        console.log('Clearing stale offline sale:', sale.id);
+                        await this.deleteData('sales', sale.id);
+                    }
+                }
+                // If still online after 2 seconds, sync any remaining pending data
+                setTimeout(() => {
+                    if (this.isOnline) {
+                        this.syncAllData().catch(e => console.warn('Sync error:', e));
+                    }
+                }, 2000);
+            }
+            
             if ('serviceWorker' in navigator) {
-                navigator.serviceWorker.register('./sw.js', { scope: '/' }).catch(() => {});
+                let basePath = window.location.pathname.replace(/\/pages\/.*$/, '');
+                if (basePath === window.location.pathname) {
+                    basePath = window.location.pathname.replace(/\/[^\/]*$/, '');
+                }
+                if (!basePath) {
+                    basePath = '/';
+                }
+                const scope = basePath.endsWith('/') ? basePath : `${basePath}/`;
+                const swUrl = `${basePath.replace(/\/$/, '')}/sw.js`;
+                navigator.serviceWorker.register(swUrl, { scope }).catch((error) => {
+                    console.warn('Service worker registration failed:', error);
+                });
             }
             window.addEventListener('online', () => this.handleOnline());
             window.addEventListener('offline', () => this.handleOffline());
             this.ready = true;
+            console.log('Offline manager: Initialization complete, ready =', this.ready);
         } catch (error) {
+            console.error('Offline manager: Initialization failed:', error);
             this.ready = false;
         }
     }
@@ -55,6 +89,7 @@ class POSOfflineManager {
 
     async handleOnline() {
         this.isOnline = true;
+        await this.syncAllData();
     }
 
     async handleOffline() {
@@ -223,11 +258,18 @@ class POSOfflineManager {
         });
     }
 
+    async removeOfflineSale(id) {
+        return await this.deleteData('sales', id);
+    }
+
     async syncAllData() {
         if (!this.isOnline) return;
         const sales = await this.getOfflineSales();
         for (const sale of sales.filter(s => !s.synced)) {
-            await this.syncSale(sale);
+            const synced = await this.syncSale(sale);
+            if (synced) {
+                await this.deleteData('sales', sale.id);
+            }
         }
     }
 
@@ -243,7 +285,11 @@ class POSOfflineManager {
 
 // Initialize when DOM is ready
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => { window.posOffline = new POSOfflineManager(); });
+    document.addEventListener('DOMContentLoaded', () => { 
+        window.posOffline = new POSOfflineManager();
+        window.posOfflineManager = window.posOffline;
+    });
 } else {
     window.posOffline = new POSOfflineManager();
+    window.posOfflineManager = window.posOffline;
 }

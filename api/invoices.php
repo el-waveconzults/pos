@@ -22,6 +22,13 @@ function getInvoiceDetails()
     global $conn;
     $invoice_id = intval($_GET['invoice_id'] ?? 0);
 
+    // IDOR Check
+    $currentUser = getCurrentUser();
+    if (!verifyIDOR('invoices', $invoice_id, $currentUser['company_id'])) {
+        echo json_encode(['success' => false, 'message' => 'Unauthorized access']);
+        exit;
+    }
+
     $stmt = $conn->prepare("SELECT i.*, COALESCE(c.name, 'Walk-in') as customer_name, c.phone as customer_phone, c.email as customer_email 
         FROM invoices i 
         LEFT JOIN customers c ON i.customer_id = c.id 
@@ -44,13 +51,24 @@ function recordPayment()
     $invoice_id = $_POST['invoice_id'] ?? 0;
     $amount = floatval($_POST['amount'] ?? 0);
 
+    // IDOR Check
+    $currentUser = getCurrentUser();
+    if (!verifyIDOR('invoices', $invoice_id, $currentUser['company_id'])) {
+        echo json_encode(['success' => false, 'message' => 'Unauthorized access']);
+        exit;
+    }
+
     if ($invoice_id == 0 || $amount == 0) {
         echo json_encode(['success' => false, 'message' => 'Invalid parameters']);
         return;
     }
 
-    // Get current invoice
-    $invoice = $conn->query("SELECT * FROM invoices WHERE id = $invoice_id")->fetch_assoc();
+    // Get current invoice using prepared statement
+    $stmt = $conn->prepare("SELECT * FROM invoices WHERE id = ?");
+    $stmt->bind_param("i", $invoice_id);
+    $stmt->execute();
+    $invoice = $stmt->get_result()->fetch_assoc();
+
     if (!$invoice) {
         echo json_encode(['success' => false, 'message' => 'Invoice not found']);
         return;

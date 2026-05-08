@@ -5,11 +5,13 @@ $conn = getDB();
 $error = '';
 $success = '';
 
-// Get plan prices from settings
+// Get settings for logo display
 $settings = getSettings();
-$plan_free_days = $settings['plan_free_days'] ?? 7;
-$plan_basic_price = $settings['plan_basic_price'] ?? 5000;
-$plan_premium_price = $settings['plan_premium_price'] ?? 15000;
+
+// Plan prices removed - now handled by license system
+// $plan_free_days = $settings['plan_free_days'] ?? 7;
+// $plan_basic_price = $settings['plan_basic_price'] ?? 5000;
+// $plan_premium_price = $settings['plan_premium_price'] ?? 15000;
 
 // Handle company registration
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -25,9 +27,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $admin_email = sanitize($_POST['admin_email']);
         $admin_password = $_POST['admin_password'];
         $confirm_password = $_POST['confirm_password'];
-
-        // Plan selection
-        $plan = $_POST['plan'] ?? 'free';
 
         // Branch options
         $has_branches = isset($_POST['has_branches']) ? 1 : 0;
@@ -63,23 +62,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $conn->begin_transaction();
 
                     try {
-                        // Determine subscription status based on plan
-                        if ($plan === 'free') {
-                            // Free trial - use dynamic days from settings
-                            $subscription_status = 'trial';
-                            $trial_start = date('Y-m-d');
-                            $expiry_date = date('Y-m-d', strtotime('+' . $plan_free_days . ' days'));
-                        } else {
-                            // Paid plans - activate immediately
-                            $subscription_status = 'active';
-                            $trial_start = date('Y-m-d');
-                            $expiry_date = date('Y-m-d', strtotime('+30 days'));
-                        }
-
-                        // Create company with subscription details
-                        $status = 'active';
-                        $stmt = $conn->prepare("INSERT INTO companies (name, email, phone, address, plan, subscription_status, trial_start, expiry_date, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
-                        $stmt->bind_param("sssssssss", $company_name, $company_email, $company_phone, $company_address, $plan, $subscription_status, $trial_start, $expiry_date, $status);
+                        // Create company (no plan/subscription handling - licenses managed separately)
+                        $status = 'pending'; // Companies start as pending until license is assigned
+                        $stmt = $conn->prepare("INSERT INTO companies (name, email, phone, address, status) VALUES (?, ?, ?, ?, ?)");
+                        $stmt->bind_param("sssss", $company_name, $company_email, $company_phone, $company_address, $status);
                         $stmt->execute();
                         $company_id = $conn->insert_id;
 
@@ -108,7 +94,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                         $conn->commit();
 
-                        $success = 'Registration successful! You may now log in with your credentials.';
+                        // Send pending registration emails
+                        $loginUrl = APP_URL . '/login.php';
+                        sendPendingApprovalEmail($company_name, $company_email, $admin_name, $admin_email, $loginUrl);
+                        sendCompanyPendingApprovalEmail($company_name, $company_email, $loginUrl);
+
+                        $success = 'Registration successful! Your company is pending review by the super admin. You will be able to log in once approval is complete.';
 
                         echo '<script>setTimeout(function(){ window.location.href = "login.php"; }, 3000);</script>';
                     } catch (Exception $e) {
@@ -133,266 +124,425 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
         body {
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            margin: 0;
             min-height: 100vh;
-            padding: 40px 0;
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: radial-gradient(circle at top left, rgba(59, 130, 246, 0.22), transparent 22%),
+                radial-gradient(circle at bottom right, rgba(236, 72, 153, 0.16), transparent 18%),
+                linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: #e2e8f0;
         }
 
-        .register-card {
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
-            max-width: 700px;
+        .auth-page {
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 2rem;
+            max-width: 1120px;
             margin: 0 auto;
+            padding: 3rem 1rem;
+            align-items: start;
+        }
+
+        .auth-side,
+        .auth-card {
+            border-radius: 32px;
             overflow: hidden;
         }
 
-        .register-header {
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            color: white;
-            padding: 30px;
-            text-align: center;
+        .auth-side {
+            position: relative;
+            padding: 3rem;
+            background: rgba(15, 23, 42, 0.94);
+            border: 1px solid rgba(148, 163, 184, 0.16);
+            box-shadow: 0 35px 90px rgba(15, 23, 42, 0.35);
         }
 
-        .register-body {
-            padding: 40px;
+        .auth-side::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at top left, rgba(96, 165, 250, 0.28), transparent 28%),
+                radial-gradient(circle at bottom right, rgba(236, 72, 153, 0.18), transparent 22%);
+            opacity: 0.88;
+            pointer-events: none;
+        }
+
+        .auth-side-inner {
+            position: relative;
+            z-index: 1;
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.14em;
+            color: #93c5fd;
+            margin-bottom: 1.25rem;
+        }
+
+        .auth-side h1 {
+            margin: 0;
+            font-size: clamp(2.2rem, 4vw, 3rem);
+            line-height: 1.05;
+            color: #f8fafc;
+        }
+
+        .auth-side p {
+            color: #cbd5e1;
+            margin-top: 1rem;
+            margin-bottom: 2rem;
+            line-height: 1.8;
+            max-width: 42rem;
+        }
+
+        .feature-list {
+            display: grid;
+            gap: 1rem;
+        }
+
+        .feature-item {
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+            color: #e2e8f0;
+            font-size: 0.98rem;
+        }
+
+        .feature-item i {
+            color: #38bdf8;
+            min-width: 1.5rem;
+            text-align: center;
+            font-size: 1.1rem;
+        }
+
+        .auth-card {
+            background: #ffffff;
+            box-shadow: 0 35px 90px rgba(15, 23, 42, 0.12);
+        }
+
+        .auth-card-header {
+            padding: 2rem;
+            text-align: center;
+            background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+        }
+
+        .welcome-title {
+            margin: 0;
+            font-size: clamp(2rem, 5vw, 2.8rem);
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            line-height: 1.1;
+        }
+
+        .logo-box {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 100px;
+            height: 100px;
+            border-radius: 28px;
+            background: #eef2ff;
+            overflow: hidden;
+        }
+
+        .logo-box img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+
+        .logo-box i {
+            color: #2563eb;
+            font-size: 2.5rem;
+        }
+
+        .auth-card-body {
+            padding: 2.5rem;
+            color: #0f172a;
+        }
+
+        .form-label {
+            font-weight: 600;
+            color: #0f172a;
+        }
+
+        .form-check-label {
+            color: #0f172a;
+            font-weight: 600;
+        }
+
+        .form-control {
+            border-radius: 16px;
+            border: 1px solid #cbd5e1;
+            padding: 1rem 1rem;
         }
 
         .form-control:focus {
-            border-color: #2a5298;
-            box-shadow: 0 0 0 0.2rem rgba(42, 82, 152, 0.25);
+            border-color: #2563eb;
+            box-shadow: 0 0 0 0.2rem rgba(37, 99, 235, 0.18);
+        }
+
+        .input-group-text {
+            background: #f8fafc;
+            border: 1px solid #cbd5e1;
+            border-right: 0;
+        }
+
+        .form-check-input {
+            width: 1.2rem;
+            height: 1.2rem;
         }
 
         .btn-register {
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            border-radius: 16px;
+            padding: 1rem 1.25rem;
+            font-weight: 700;
+            background: #2563eb;
             border: none;
-            padding: 12px;
-            font-weight: 600;
+        }
+
+        .btn-register:hover {
+            background: #1d4ed8;
         }
 
         .section-title {
-            color: #1e3c72;
-            border-bottom: 2px solid #1e3c72;
+            color: #0f172a;
+            border-bottom: 2px solid #cbd5e1;
             padding-bottom: 10px;
             margin-bottom: 20px;
-            font-weight: 600;
+            font-weight: 700;
         }
 
-        .login-link {
+        .help-text {
+            color: #475569;
+            font-size: 0.95rem;
+        }
+
+        .auth-footer {
+            margin-top: 1.75rem;
             text-align: center;
-            margin-top: 20px;
-            padding-top: 20px;
-            border-top: 1px solid #dee2e6;
+            color: #64748b;
+            font-size: 0.95rem;
         }
 
-        .plan-card {
-            cursor: pointer;
-            transition: all 0.3s;
-            border: 2px solid transparent;
+        .auth-footer a {
+            color: #2563eb;
+            text-decoration: none;
         }
 
-        .plan-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
-        }
+        @media (max-width: 990px) {
+            .auth-page {
+                grid-template-columns: 1fr;
+                padding: 2rem 1rem;
+            }
 
-        .plan-card.border-primary {
-            border-color: #0d6efd;
-            background-color: #f8f9fa;
-        }
-
-        .plan-card input[type="radio"] {
-            margin-top: 10px;
+            .auth-side {
+                order: 2;
+            }
         }
     </style>
 </head>
 
 <body>
 
-    <div class="register-card">
-        <div class="register-header">
-            <h3><i class="fas fa-building"></i> Register Your Company</h3>
-            <p class="mb-0">Create your business account and get started</p>
+    <div class="auth-page">
+        <div class="auth-side">
+            <div class="auth-side-inner">
+                <div class="eyebrow"><i class="fas fa-rocket"></i> Create your account</div>
+                <h1>Register your company in minutes</h1>
+                <p>Set up your business account, add your first branch, and start managing sales with ease.</p>
+                <div class="feature-list">
+                    <div class="feature-item"><i class="fas fa-check-circle"></i><span>Simple onboarding flow</span></div>
+                    <div class="feature-item"><i class="fas fa-check-circle"></i><span>Company and admin setup</span></div>
+                    <div class="feature-item"><i class="fas fa-check-circle"></i><span>Built for fast deployment</span></div>
+                </div>
+            </div>
         </div>
 
-        <div class="register-body">
-            <?php if ($error): ?>
-                <div class="alert alert-danger">
-                    <i class="fas fa-exclamation-circle"></i> <?= $error ?>
-                </div>
-            <?php endif; ?>
-
-            <?php if ($success): ?>
-                <div class="alert alert-success">
-                    <i class="fas fa-check-circle"></i> <?= $success ?>
-                    <div class="mt-2">
-                        <a href="login.php" class="btn btn-primary">Go to Login Now</a>
+        <div class="auth-card">
+            <div class="auth-card-header">
+                <h2 class="welcome-title">GET STARTED</h2>
+            </div>
+            <div class="auth-card-body">
+                <?php if ($error): ?>
+                    <div class="alert alert-danger">
+                        <i class="fas fa-exclamation-circle"></i> <?= $error ?>
                     </div>
-                </div>
-            <?php else: ?>
-                <form method="POST" action="">
-                    <input type="hidden" name="csrf_token" value="<?= generateCSRFToken() ?>">
-                    <!-- Company Information -->
-                    <h5 class="section-title"><i class="fas fa-building"></i> Company Information</h5>
+                <?php endif; ?>
 
-                    <div class="row">
-                        <div class="col-md-6">
-                            <div class="mb-3">
-                                <label class="form-label">Company Name</label>
-                                <input type="text" name="company_name" class="form-control" placeholder="Enter company name" required value="<?= isset($_POST['company_name']) ? htmlspecialchars($_POST['company_name']) : '' ?>">
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="mb-3">
-                                <label class="form-label">Company Email</label>
-                                <input type="email" name="company_email" class="form-control" placeholder="company@example.com" required value="<?= isset($_POST['company_email']) ? htmlspecialchars($_POST['company_email']) : '' ?>">
-                            </div>
+                <?php if ($success): ?>
+                    <div class="alert alert-success">
+                        <i class="fas fa-check-circle"></i> <?= $success ?>
+                        <div class="mt-3">
+                            <a href="login.php" class="btn btn-primary">Go to Login</a>
                         </div>
                     </div>
+                <?php else: ?>
+                    <form method="POST" action="">
+                        <input type="hidden" name="csrf_token" value="<?= generateCSRFToken() ?>">
+                        <h5 class="section-title">Company Information</h5>
 
-                    <div class="row">
-                        <div class="col-md-6">
-                            <div class="mb-3">
-                                <label class="form-label">Phone Number</label>
-                                <input type="text" name="company_phone" class="form-control" placeholder="+234..." value="<?= isset($_POST['company_phone']) ? htmlspecialchars($_POST['company_phone']) : '' ?>">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Company Name</label>
+                                    <input type="text" name="company_name" class="form-control" placeholder="Enter company name" required value="<?= isset($_POST['company_name']) ? htmlspecialchars($_POST['company_name']) : '' ?>">
+                                </div>
                             </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="mb-3">
-                                <label class="form-label">Address</label>
-                                <input type="text" name="company_address" class="form-control" placeholder="Company address" value="<?= isset($_POST['company_address']) ? htmlspecialchars($_POST['company_address']) : '' ?>">
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Plan Selection -->
-                    <h5 class="section-title mt-4"><i class="fas fa-tags"></i> Choose Your Plan</h5>
-                    <div class="row mb-3">
-                        <div class="col-md-4">
-                            <div class="card plan-card <?= (isset($_POST['plan']) && $_POST['plan'] === 'free') ? 'border-primary' : '' ?>" onclick="selectPlan('free')">
-                                <div class="card-body text-center">
-                                    <h5><i class="fas fa-gift text-primary"></i> Free Trial</h5>
-                                    <p class="text-muted mb-0"><?= $plan_free_days ?> Days Free</p>
-                                    <input type="radio" name="plan" value="free" id="planFree" <?= (!isset($_POST['plan']) || $_POST['plan'] === 'free') ? 'checked' : '' ?>>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Company Email</label>
+                                    <input type="email" name="company_email" class="form-control" placeholder="company@example.com" required value="<?= isset($_POST['company_email']) ? htmlspecialchars($_POST['company_email']) : '' ?>">
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-4">
-                            <div class="card plan-card <?= (isset($_POST['plan']) && $_POST['plan'] === 'basic') ? 'border-primary' : '' ?>" onclick="selectPlan('basic')">
-                                <div class="card-body text-center">
-                                    <h5><i class="fas fa-star text-success"></i> Basic</h5>
-                                    <p class="text-muted mb-0">₦<?= number_format($plan_basic_price) ?>/month</p>
-                                    <input type="radio" name="plan" value="basic" id="planBasic" <?= isset($_POST['plan']) && $_POST['plan'] === 'basic' ? 'checked' : '' ?>>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="card plan-card <?= (isset($_POST['plan']) && $_POST['plan'] === 'premium') ? 'border-primary' : '' ?>" onclick="selectPlan('premium')">
-                                <div class="card-body text-center">
-                                    <h5><i class="fas fa-crown text-warning"></i> Premium</h5>
-                                    <p class="text-muted mb-0">₦<?= number_format($plan_premium_price) ?>/month</p>
-                                    <input type="radio" name="plan" value="premium" id="planPremium" <?= isset($_POST['plan']) && $_POST['plan'] === 'premium' ? 'checked' : '' ?>>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
 
-                    <!-- Branch Setup -->
-                    <div class="mb-3">
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="hasBranches" name="has_branches" value="1" onchange="toggleBranchFields()">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Phone Number</label>
+                                    <input type="text" name="company_phone" class="form-control" placeholder="+234..." value="<?= isset($_POST['company_phone']) ? htmlspecialchars($_POST['company_phone']) : '' ?>">
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Address</label>
+                                    <input type="text" name="company_address" class="form-control" placeholder="Company address" value="<?= isset($_POST['company_address']) ? htmlspecialchars($_POST['company_address']) : '' ?>">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mb-3 form-check">
+                            <input class="form-check-input" type="checkbox" id="hasBranches" name="has_branches" value="1" onchange="toggleBranchFields()" <?= isset($_POST['has_branches']) ? 'checked' : '' ?>>
                             <label class="form-check-label fw-bold" for="hasBranches">
                                 <i class="fas fa-sitemap"></i> This company has multiple branches
                             </label>
                         </div>
-                        <small class="text-muted">Check this if you want to manage multiple store locations under one company</small>
-                    </div>
+                        <p class="help-text mb-4">Check this if you want to manage multiple store locations under one company.</p>
 
-                    <div id="branchFields" style="display: none;">
-                        <h5 class="section-title mt-3"><i class="fas fa-store"></i> Head Office (First Branch)</h5>
+                        <div id="branchFields" style="display: none;">
+                            <h5 class="section-title">Head Office (First Branch)</h5>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">Branch Name</label>
+                                        <input type="text" name="branch_name" class="form-control" placeholder="Main Branch / Headquarters" value="<?= isset($_POST['branch_name']) ? htmlspecialchars($_POST['branch_name']) : '' ?>">
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">Branch Phone</label>
+                                        <input type="text" name="branch_phone" class="form-control" placeholder="+234..." value="<?= isset($_POST['branch_phone']) ? htmlspecialchars($_POST['branch_phone']) : '' ?>">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Branch Address</label>
+                                <input type="text" name="branch_address" class="form-control" placeholder="Branch address" value="<?= isset($_POST['branch_address']) ? htmlspecialchars($_POST['branch_address']) : '' ?>">
+                            </div>
+                        </div>
+
+                        <h5 class="section-title mt-4">Admin User</h5>
                         <div class="row">
                             <div class="col-md-6">
                                 <div class="mb-3">
-                                    <label class="form-label">Branch Name</label>
-                                    <input type="text" name="branch_name" class="form-control" placeholder="e.g., Main Branch / Headquarters">
+                                    <label class="form-label">Admin Name</label>
+                                    <input type="text" name="admin_name" class="form-control" placeholder="Admin name" required value="<?= isset($_POST['admin_name']) ? htmlspecialchars($_POST['admin_name']) : '' ?>">
                                 </div>
                             </div>
                             <div class="col-md-6">
                                 <div class="mb-3">
-                                    <label class="form-label">Branch Phone</label>
-                                    <input type="text" name="branch_phone" class="form-control" placeholder="+234...">
+                                    <label class="form-label">Admin Email</label>
+                                    <input type="email" name="admin_email" class="form-control" placeholder="admin@example.com" required value="<?= isset($_POST['admin_email']) ? htmlspecialchars($_POST['admin_email']) : '' ?>">
                                 </div>
                             </div>
                         </div>
-                        <div class="mb-3">
-                            <label class="form-label">Branch Address</label>
-                            <textarea name="branch_address" class="form-control" rows="2" placeholder="Branch address"></textarea>
-                        </div>
-                    </div>
 
-                    <script>
-                        function toggleBranchFields() {
-                            const checkbox = document.getElementById('hasBranches');
-                            const branchFields = document.getElementById('branchFields');
-                            branchFields.style.display = checkbox.checked ? 'block' : 'none';
-                        }
-
-                        function selectPlan(plan) {
-                            document.getElementById('plan' + plan.charAt(0).toUpperCase() + plan.slice(1)).checked = true;
-                            document.querySelectorAll('.plan-card').forEach(card => card.classList.remove('border-primary'));
-                            event.currentTarget.classList.add('border-primary');
-                        }
-                    </script>
-
-                    <!-- Admin Information -->
-                    <h5 class="section-title mt-4"><i class="fas fa-user-shield"></i> Admin Account</h5>
-
-                    <div class="row">
-                        <div class="col-md-6">
-                            <div class="mb-3">
-                                <label class="form-label">Admin Full Name</label>
-                                <input type="text" name="admin_name" class="form-control" placeholder="Your full name" required value="<?= isset($_POST['admin_name']) ? htmlspecialchars($_POST['admin_name']) : '' ?>">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Password</label>
+                                    <div class="input-group">
+                                        <input type="password" name="admin_password" class="form-control" placeholder="Create a password" required id="admin_password">
+                                        <button class="btn btn-outline-secondary" type="button" id="toggleAdminPassword">
+                                            <i class="fas fa-eye"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Confirm Password</label>
+                                    <div class="input-group">
+                                        <input type="password" name="confirm_password" class="form-control" placeholder="Confirm password" required id="confirm_password">
+                                        <button class="btn btn-outline-secondary" type="button" id="toggleConfirmPassword">
+                                            <i class="fas fa-eye"></i>
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
-                        <div class="col-md-6">
-                            <div class="mb-3">
-                                <label class="form-label">Admin Email</label>
-                                <input type="email" name="admin_email" class="form-control" placeholder="admin@company.com" required value="<?= isset($_POST['admin_email']) ? htmlspecialchars($_POST['admin_email']) : '' ?>">
-                            </div>
-                        </div>
-                    </div>
 
-                    <div class="row">
-                        <div class="col-md-6">
-                            <div class="mb-3">
-                                <label class="form-label">Password</label>
-                                <input type="password" name="admin_password" class="form-control" placeholder="Create password (min 6 characters)" required>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="mb-3">
-                                <label class="form-label">Confirm Password</label>
-                                <input type="password" name="confirm_password" class="form-control" placeholder="Confirm password" required>
-                            </div>
-                        </div>
-                    </div>
+                        <button type="submit" class="btn btn-register w-100 mt-3">Create account</button>
+                    </form>
+                <?php endif; ?>
 
-                    <div class="d-grid gap-2 mt-4">
-                        <button type="submit" class="btn btn-primary btn-register">
-                            <i class="fas fa-user-plus"></i> Register Company
-                        </button>
-                    </div>
-                </form>
-
-            <?php endif; ?>
-
-            <div class="login-link">
-                <p class="mb-0">Already have a company account? <a href="login.php">Login here</a></p>
+                <div class="auth-footer">
+                    <p class="mb-2">Already have an account? <a href="login.php">Sign in</a></p>
+                    <p class="help-text">Your company information and admin user are set up in one secure step.</p>
+                </div>
             </div>
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function toggleBranchFields() {
+            const checkbox = document.getElementById('hasBranches');
+            const branchFields = document.getElementById('branchFields');
+            if (!branchFields) return;
+            branchFields.style.display = checkbox.checked ? 'block' : 'none';
+        }
+        document.addEventListener('DOMContentLoaded', function() {
+            toggleBranchFields();
+        });
+
+        // Password visibility toggle
+        document.getElementById('toggleAdminPassword').addEventListener('click', function() {
+            const passwordInput = document.getElementById('admin_password');
+            const icon = this.querySelector('i');
+            if (passwordInput.type === 'password') {
+                passwordInput.type = 'text';
+                icon.classList.remove('fa-eye');
+                icon.classList.add('fa-eye-slash');
+            } else {
+                passwordInput.type = 'password';
+                icon.classList.remove('fa-eye-slash');
+                icon.classList.add('fa-eye');
+            }
+        });
+
+        document.getElementById('toggleConfirmPassword').addEventListener('click', function() {
+            const passwordInput = document.getElementById('confirm_password');
+            const icon = this.querySelector('i');
+            if (passwordInput.type === 'password') {
+                passwordInput.type = 'text';
+                icon.classList.remove('fa-eye');
+                icon.classList.add('fa-eye-slash');
+            } else {
+                passwordInput.type = 'password';
+                icon.classList.remove('fa-eye-slash');
+                icon.classList.add('fa-eye');
+            }
+        });
+    </script>
 </body>
 
 </html>
